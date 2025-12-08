@@ -5,6 +5,7 @@
  * and industry benchmarks by company stage.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type {
   CallToolResult,
@@ -292,50 +293,60 @@ server.registerResource(
 );
 
 // ---------------------------------------------------------------------------
-// Express Server
+// Server Startup
 // ---------------------------------------------------------------------------
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-app.post("/mcp", async (req: Request, res: Response) => {
-  try {
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
-    res.on("close", () => {
-      transport.close();
-    });
-
+async function main() {
+  if (process.argv.includes("--stdio")) {
+    const transport = new StdioServerTransport();
     await server.connect(transport);
-    await transport.handleRequest(req, res, req.body);
-  } catch (error) {
-    console.error("Error handling MCP request:", error);
-    if (!res.headersSent) {
-      res.status(500).json({
-        jsonrpc: "2.0",
-        error: { code: -32603, message: "Internal server error" },
-        id: null,
+    console.error("Budget Allocator Server running in stdio mode");
+  } else {
+    const app = express();
+    app.use(cors());
+    app.use(express.json());
+
+    app.post("/mcp", async (req: Request, res: Response) => {
+      try {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+          enableJsonResponse: true,
+        });
+        res.on("close", () => {
+          transport.close();
+        });
+
+        await server.connect(transport);
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error("Error handling MCP request:", error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "Internal server error" },
+            id: null,
+          });
+        }
+      }
+    });
+
+    const httpServer = app.listen(PORT, () => {
+      console.log(
+        `Budget Allocator Server listening on http://localhost:${PORT}/mcp`,
+      );
+    });
+
+    function shutdown() {
+      console.log("\nShutting down...");
+      httpServer.close(() => {
+        console.log("Server closed");
+        process.exit(0);
       });
     }
+
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
   }
-});
-
-const httpServer = app.listen(PORT, () => {
-  console.log(
-    `Budget Allocator Server listening on http://localhost:${PORT}/mcp`,
-  );
-});
-
-function shutdown() {
-  console.log("\nShutting down...");
-  httpServer.close(() => {
-    console.log("Server closed");
-    process.exit(0);
-  });
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+main().catch(console.error);
